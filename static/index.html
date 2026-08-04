@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Finanças Pessoais</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2d3148;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --green: #10b981;
+    --red: #ef4444;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --radius: 12px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+  }
+
+  /* Layout */
+  .shell { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 240px; flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: 24px 0;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .logo {
+    padding: 0 20px 24px;
+    font-size: 1.1rem; font-weight: 700;
+    letter-spacing: -.5px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo span { font-size: 1.4rem; }
+  nav { padding: 16px 10px; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 8px;
+    cursor: pointer; font-size: .9rem; font-weight: 500;
+    color: var(--muted); transition: all .15s;
+    margin-bottom: 2px;
+  }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: var(--accent); color: #fff; }
+  .nav-item .icon { font-size: 1.1rem; width: 22px; text-align: center; }
+
+  .main { flex: 1; overflow-x: hidden; }
+  .topbar {
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar h1 { font-size: 1.2rem; font-weight: 700; }
+  .page { padding: 28px 32px; display: none; }
+  .page.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .card h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
+  .card .value { font-size: 1.8rem; font-weight: 700; }
+
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 48px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    background: var(--surface);
+    margin-bottom: 24px;
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--accent); background: rgba(99,102,241,.06); }
+  .upload-zone .icon { font-size: 2.5rem; margin-bottom: 12px; }
+  .upload-zone p { color: var(--muted); font-size: .9rem; margin-top: 6px; }
+  .upload-zone strong { font-size: 1rem; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 8px; font-size: .875rem;
+    font-weight: 600; cursor: pointer; border: none;
+    transition: all .15s; text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .btn-sm { padding: 5px 10px; font-size: .8rem; }
+  .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--border); }
+  .btn-danger:hover { background: var(--red); color: #fff; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th { text-align: left; padding: 10px 14px; color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
+  td { padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  /* Badge */
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 20px; font-size: .75rem; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+
+  /* Period selector */
+  .period-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
+  .period-tab {
+    padding: 6px 14px; border-radius: 20px; font-size: .8rem; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); color: var(--muted);
+    background: var(--surface); transition: all .15s;
+  }
+  .period-tab:hover { color: var(--text); border-color: var(--muted); }
+  .period-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Category bar */
+  .cat-bar { display: flex; flex-direction: column; gap: 10px; }
+  .cat-row { display: flex; align-items: center; gap: 10px; }
+  .cat-row .name { width: 140px; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat-row .bar-wrap { flex: 1; background: var(--surface2); border-radius: 4px; height: 8px; overflow: hidden; }
+  .cat-row .bar-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+  .cat-row .amount { width: 90px; text-align: right; font-size: .85rem; font-weight: 600; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px;
+    box-shadow: var(--shadow); z-index: 1000;
+    font-size: .875rem; display: flex; align-items: center; gap: 10px;
+    transform: translateY(80px); opacity: 0;
+    transition: all .3s; pointer-events: none;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  /* Modal */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    z-index: 100; display: none; align-items: center; justify-content: center;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; width: 480px; max-width: 95vw;
+    box-shadow: var(--shadow);
+  }
+  .modal h2 { margin-bottom: 20px; font-size: 1.1rem; }
+
+  /* Form */
+  .form-group { margin-bottom: 16px; }
+  label { display: block; margin-bottom: 6px; font-size: .8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  input[type=text], input[type=color], select, textarea {
+    width: 100%; padding: 9px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: .9rem;
+    outline: none; font-family: inherit;
+  }
+  input[type=text]:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  input[type=color] { height: 38px; cursor: pointer; }
+  textarea { resize: vertical; min-height: 80px; }
+  .flex-row { display: flex; gap: 12px; align-items: flex-end; }
+  .flex-row > * { flex: 1; }
+
+  /* Loading */
+  .loading { text-align: center; padding: 48px; color: var(--muted); }
+  .spinner { display: inline-block; width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Amount colors */
+  .debit  { color: var(--red); }
+  .credit { color: var(--green); }
+
+  /* Section header */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .section-header h2 { font-size: 1rem; font-weight: 700; }
+
+  /* Progress upload */
+  .upload-status { padding: 16px; background: var(--surface2); border-radius: 8px; }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 64px 32px; color: var(--muted); }
+  .empty .icon { font-size: 3rem; margin-bottom: 16px; }
+
+  /* Tags chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 3px 10px; font-size: .8rem;
+  }
+  .chip .remove { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  .chip .remove:hover { color: var(--red); }
+
+  @media (max-width: 768px) {
+    .sidebar { display: none; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .page { padding: 16px; }
+    .topbar { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo"><span>💰</span> Finanças</div>
+    <nav>
+      <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+        <span class="icon">📊</span> Dashboard
+      </div>
+      <div class="nav-item" data-page="movimentos" onclick="navigate('movimentos')">
+        <span class="icon">📋</span> Movimentos
+      </div>
+      <div class="nav-item" data-page="importar" onclick="navigate('importar')">
+        <span class="icon">⬆️</span> Importar PDF
+      </div>
+      <div class="nav-item" data-page="categorias" onclick="navigate('categorias')">
+        <span class="icon">🏷️</span> Categorias
+      </div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <h1 id="page-title">Dashboard</h1>
+      <div id="topbar-actions"></div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div class="page active" id="page-dashboard">
+      <div class="period-tabs" id="period-tabs"></div>
+
+      <div class="grid-4" id="summary-cards">
+        <div class="card"><h3>Despesas</h3><div class="value debit" id="s-debito">—</div></div>
+        <div class="card"><h3>Receitas</h3><div class="value credit" id="s-credito">—</div></div>
+        <div class="card"><h3>Saldo período</h3><div class="value" id="s-saldo">—</div></div>
+        <div class="card"><h3>Movimentos</h3><div class="value" id="s-count">—</div></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="section-header"><h2>Despesas por categoria</h2></div>
+          <div class="cat-bar" id="cat-bars"></div>
+        </div>
+        <div class="card">
+          <div class="section-header"><h2>Últimos movimentos</h2></div>
+          <div id="recent-movs"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MOVIMENTOS -->
+    <div class="page" id="page-movimentos">
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+        <select id="filter-periodo" style="width:auto" onchange="loadMovimentos()"><option value="">Todos os períodos</option></select>
+        <select id="filter-categoria" style="width:auto" onchange="loadMovimentos()"><option value="">Todas as categorias</option></select>
+        <input type="text" id="filter-search" placeholder="Pesquisar descrição..." style="flex:1;min-width:180px" oninput="filterTable()">
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table id="mov-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Descrição</th>
+                <th>Categoria</th>
+                <th>Débito</th>
+                <th>Crédito</th>
+                <th>Saldo</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="mov-tbody"></tbody>
+          </table>
+        </div>
+        <div id="mov-loading" class="loading" style="display:none"><div class="spinner"></div></div>
+        <div id="mov-empty" class="empty" style="display:none"><div class="icon">📭</div><p>Sem movimentos para este filtro.</p></div>
+      </div>
+    </div>
+
+    <!-- IMPORTAR -->
+    <div class="page" id="page-importar">
+      <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+           ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="drop(event)">
+        <div class="icon">📄</div>
+        <strong>Clica ou arrasta um PDF aqui</strong>
+        <p>Ficheiro de movimentos bancários (DATA LANC · DATA VALOR · DESCRITIVO · DÉBITO · CRÉDITO · SALDO)</p>
+      </div>
+      <input type="file" id="file-input" accept=".pdf" style="display:none" onchange="uploadPDF(this.files[0])">
+
+      <div id="upload-result" style="display:none" class="card">
+        <div id="upload-status"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3 style="margin-bottom:12px">ℹ️ Formatos suportados</h3>
+        <p style="font-size:.875rem;color:var(--muted);line-height:1.7">
+          O PDF deve ter as colunas <strong>DATA LANC · DATA VALOR · DESCRITIVO · DÉBITO · CRÉDITO · SALDO</strong>.
+          A aplicação tenta extrair tabelas automáticamente — se o teu banco exporta PDFs com texto seleccionável, funciona na maioria dos casos.
+          <br><br>
+          Datas aceites: <code>DD-MM-YYYY</code>, <code>DD/MM/YYYY</code>, <code>YYYY-MM-DD</code>.
+          Valores: formato português (<code>1.234,56</code>) ou simples (<code>1234.56</code>).
+          <br><br>
+          Importações repetidas do mesmo ficheiro ignoram duplicados automaticamente.
+        </p>
+      </div>
+    </div>
+
+    <!-- CATEGORIAS -->
+    <div class="page" id="page-categorias">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+        <button class="btn btn-primary" onclick="openCatModal()">+ Nova categoria</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Categoria</th><th>Cor</th><th>Palavras-chave</th><th></th></tr></thead>
+            <tbody id="cat-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost" onclick="recategorizar()">🔄 Re-categorizar todos os movimentos</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal categoria -->
+<div class="modal-bg" id="cat-modal">
+  <div class="modal">
+    <h2 id="cat-modal-title">Nova categoria</h2>
+    <input type="hidden" id="cat-id">
+    <div class="flex-row">
+      <div class="form-group" style="flex:1">
+        <label>Nome</label>
+        <input type="text" id="cat-nome" placeholder="Ex: Alimentação">
+      </div>
+      <div class="form-group" style="flex:0 0 60px">
+        <label>Cor</label>
+        <input type="color" id="cat-cor" value="#6366f1">
+      </div>
+      <div class="form-group" style="flex:0 0 60px">
+        <label>Ícone</label>
+        <input type="text" id="cat-icone" placeholder="🏷️" style="font-size:1.3rem;text-align:center">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Palavras-chave (automático)</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="kw-input" placeholder="ex: supermercado" onkeydown="if(event.key==='Enter'){addKeyword();event.preventDefault()}">
+        <button class="btn btn-ghost btn-sm" onclick="addKeyword()">+</button>
+      </div>
+      <div class="chips" id="kw-chips"></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-ghost" onclick="closeCatModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveCategoria()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal mudar categoria -->
+<div class="modal-bg" id="mov-modal">
+  <div class="modal">
+    <h2>Alterar categoria</h2>
+    <input type="hidden" id="mov-id">
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:16px" id="mov-desc"></p>
+    <div class="form-group">
+      <label>Categoria</label>
+      <select id="mov-cat-select"></select>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeMovModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveMovCategoria()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let categorias = [];
+let periodos = [];
+let activePeriodo = null;
+let currentMovimentos = [];
+let keywords = [];
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+const titles = { dashboard: 'Dashboard', movimentos: 'Movimentos', importar: 'Importar PDF', categorias: 'Categorias' };
+
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+  document.getElementById('page-title').textContent = titles[page];
+
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'movimentos') { loadPeriodFilter(); loadCatFilter(); loadMovimentos(); }
+  if (page === 'categorias') loadCategorias();
+}
+
+// ── Format ───────────────────────────────────────────────────────────────────
+function fmt(val) {
+  if (val == null) return '—';
+  return val.toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+}
+function fmtDate(s) {
+  if (!s) return '—';
+  const [y,m,d] = s.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, ok = true) {
+  const t = document.getElementById('toast');
+  t.innerHTML = `${ok ? '✅' : '❌'} ${msg}`;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Categories ───────────────────────────────────────────────────────────────
+async function fetchCategorias() {
+  const r = await fetch('/api/categorias');
+  categorias = await r.json();
+  return categorias;
+}
+
+function catStyle(nome) {
+  const c = categorias.find(x => x.nome === nome);
+  return c ? { cor: c.cor, icone: c.icone } : { cor: '#94a3b8', icone: '❓' };
+}
+
+function badgeHtml(nome, movId) {
+  const { cor, icone } = catStyle(nome);
+  return `<span class="badge" style="background:${cor}22;color:${cor};border:1px solid ${cor}44"
+    onclick="openMovModal(${movId},'${nome.replace(/'/g,"\\'")}',this)">${icone} ${nome}</span>`;
+}
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  await fetchCategorias();
+  const [resumo, periodos_res] = await Promise.all([
+    fetch('/api/resumo').then(r => r.json()),
+    fetch('/api/periodos').then(r => r.json())
+  ]);
+  periodos = periodos_res;
+
+  if (!activePeriodo && periodos.length) activePeriodo = periodos[0].periodo;
+
+  // Period tabs
+  const tabs = document.getElementById('period-tabs');
+  if (periodos.length === 0) {
+    tabs.innerHTML = '';
+    document.getElementById('cat-bars').innerHTML = '<div class="empty"><div class="icon">📭</div><p>Importa um PDF para começar.</p></div>';
+    return;
+  }
+  tabs.innerHTML = periodos.map(p =>
+    `<div class="period-tab ${p.periodo === activePeriodo ? 'active' : ''}" onclick="selectPeriodo('${p.periodo}')">${p.label}</div>`
+  ).join('');
+
+  const dados = resumo.find(r => r.periodo === activePeriodo);
+  if (!dados) return;
+
+  document.getElementById('s-debito').textContent  = fmt(dados.total_debito);
+  document.getElementById('s-credito').textContent = fmt(dados.total_credito);
+  const saldo = (dados.total_credito || 0) - (dados.total_debito || 0);
+  const sEl = document.getElementById('s-saldo');
+  sEl.textContent = fmt(Math.abs(saldo));
+  sEl.className = 'value ' + (saldo >= 0 ? 'credit' : 'debit');
+
+  // Count from movimentos
+  const movs = await fetch(`/api/movimentos?periodo=${activePeriodo}`).then(r => r.json());
+  document.getElementById('s-count').textContent = movs.length;
+
+  // Category bars
+  const maxVal = Math.max(...dados.categorias.map(c => c.total), 1);
+  const bars = document.getElementById('cat-bars');
+  bars.innerHTML = dados.categorias.filter(c => c.total > 0).slice(0, 10).map(c => {
+    const { cor, icone } = catStyle(c.nome);
+    const pct = (c.total / maxVal * 100).toFixed(1);
+    return `<div class="cat-row">
+      <div class="name">${icone} ${c.nome}</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${cor}"></div></div>
+      <div class="amount">${fmt(c.total)}</div>
+    </div>`;
+  }).join('') || '<p style="color:var(--muted);font-size:.85rem">Sem dados.</p>';
+
+  // Recent
+  const recent = document.getElementById('recent-movs');
+  recent.innerHTML = `<div class="table-wrap"><table>
+    <tbody>${movs.slice(0,8).map(m => `<tr>
+      <td style="color:var(--muted);font-size:.8rem">${fmtDate(m.data_lanc)}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.85rem">${m.descritivo}</td>
+      <td>${m.debito ? `<span class="debit">${fmt(m.debito)}</span>` : `<span class="credit">${fmt(m.credito)}</span>`}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function selectPeriodo(p) {
+  activePeriodo = p;
+  loadDashboard();
+}
+
+// ── Movimentos ────────────────────────────────────────────────────────────────
+async function loadPeriodFilter() {
+  const periodos = await fetch('/api/periodos').then(r => r.json());
+  const sel = document.getElementById('filter-periodo');
+  sel.innerHTML = '<option value="">Todos os períodos</option>' +
+    periodos.map(p => `<option value="${p.periodo}">${p.label}</option>`).join('');
+}
+
+async function loadCatFilter() {
+  await fetchCategorias();
+  const sel = document.getElementById('filter-categoria');
+  sel.innerHTML = '<option value="">Todas as categorias</option>' +
+    categorias.map(c => `<option value="${c.nome}">${c.icone} ${c.nome}</option>`).join('');
+}
+
+async function loadMovimentos() {
+  const periodo   = document.getElementById('filter-periodo').value;
+  const categoria = document.getElementById('filter-categoria').value;
+  const loading   = document.getElementById('mov-loading');
+  const empty     = document.getElementById('mov-empty');
+  const tbody     = document.getElementById('mov-tbody');
+
+  loading.style.display = 'block';
+  tbody.innerHTML = '';
+  empty.style.display = 'none';
+  await fetchCategorias();
+
+  let url = '/api/movimentos?';
+  if (periodo) url += `periodo=${periodo}&`;
+  if (categoria) url += `categoria=${encodeURIComponent(categoria)}&`;
+
+  currentMovimentos = await fetch(url).then(r => r.json());
+  loading.style.display = 'none';
+  renderMovimentos(currentMovimentos);
+}
+
+function renderMovimentos(movs) {
+  const tbody = document.getElementById('mov-tbody');
+  const empty = document.getElementById('mov-empty');
+  if (!movs.length) { empty.style.display = 'block'; tbody.innerHTML = ''; return; }
+  empty.style.display = 'none';
+  tbody.innerHTML = movs.map(m => `<tr>
+    <td style="white-space:nowrap;color:var(--muted);font-size:.8rem">${fmtDate(m.data_lanc)}</td>
+    <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.descritivo}</td>
+    <td>${badgeHtml(m.categoria, m.id)}</td>
+    <td class="debit">${m.debito ? fmt(m.debito) : ''}</td>
+    <td class="credit">${m.credito ? fmt(m.credito) : ''}</td>
+    <td style="color:var(--muted)">${m.saldo ? fmt(m.saldo) : ''}</td>
+    <td><button class="btn btn-danger btn-sm" onclick="deleteMovimento(${m.id})">🗑</button></td>
+  </tr>`).join('');
+}
+
+function filterTable() {
+  const q = document.getElementById('filter-search').value.toLowerCase();
+  const filtered = currentMovimentos.filter(m => m.descritivo.toLowerCase().includes(q));
+  renderMovimentos(filtered);
+}
+
+async function deleteMovimento(id) {
+  if (!confirm('Eliminar este movimento?')) return;
+  await fetch(`/api/movimentos/${id}`, { method: 'DELETE' });
+  loadMovimentos();
+  toast('Movimento eliminado');
+}
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+function dragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('drag'); }
+function dragLeave(e) { document.getElementById('drop-zone').classList.remove('drag'); }
+function drop(e) { e.preventDefault(); dragLeave(e); uploadPDF(e.dataTransfer.files[0]); }
+
+async function uploadPDF(file) {
+  if (!file) return;
+  const result = document.getElementById('upload-result');
+  const status = document.getElementById('upload-status');
+  result.style.display = 'block';
+  status.innerHTML = '<div class="loading"><div class="spinner"></div><p style="margin-top:12px">A processar PDF...</p></div>';
+
+  const fd = new FormData();
+  fd.append('pdf', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) {
+      status.innerHTML = `<p style="color:var(--red)">❌ ${data.error}</p>`;
+      return;
+    }
+    status.innerHTML = `
+      <p style="color:var(--green);font-weight:700;font-size:1rem;margin-bottom:8px">✅ PDF importado com sucesso</p>
+      <p style="color:var(--muted);font-size:.875rem">
+        ${data.inseridos} movimentos novos inseridos · ${data.ignorados} duplicados ignorados · ${data.total} total no ficheiro
+      </p>`;
+    toast(`${data.inseridos} movimentos importados!`);
+  } catch(e) {
+    status.innerHTML = `<p style="color:var(--red)">❌ Erro de comunicação com o servidor.</p>`;
+  }
+}
+
+// ── Categorias ────────────────────────────────────────────────────────────────
+async function loadCategorias() {
+  await fetchCategorias();
+  const tbody = document.getElementById('cat-tbody');
+  tbody.innerHTML = categorias.map(c => {
+    const palavras = JSON.parse(c.palavras_chave || '[]');
+    return `<tr>
+      <td><span style="font-size:1.2rem">${c.icone}</span> <strong>${c.nome}</strong></td>
+      <td><span style="display:inline-block;width:20px;height:20px;border-radius:4px;background:${c.cor}"></span></td>
+      <td style="font-size:.8rem;color:var(--muted)">${palavras.slice(0,5).join(', ')}${palavras.length>5?' …':''}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick='editCategoria(${JSON.stringify(c)})'>✏️ Editar</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function openCatModal(cat) {
+  keywords = [];
+  document.getElementById('cat-id').value = '';
+  document.getElementById('cat-nome').value = '';
+  document.getElementById('cat-cor').value = '#6366f1';
+  document.getElementById('cat-icone').value = '';
+  document.getElementById('cat-modal-title').textContent = 'Nova categoria';
+  renderChips();
+  document.getElementById('cat-modal').classList.add('open');
+}
+
+function editCategoria(c) {
+  keywords = JSON.parse(c.palavras_chave || '[]');
+  document.getElementById('cat-id').value = c.id;
+  document.getElementById('cat-nome').value = c.nome;
+  document.getElementById('cat-cor').value = c.cor;
+  document.getElementById('cat-icone').value = c.icone;
+  document.getElementById('cat-modal-title').textContent = 'Editar categoria';
+  renderChips();
+  document.getElementById('cat-modal').classList.add('open');
+}
+
+function closeCatModal() { document.getElementById('cat-modal').classList.remove('open'); }
+
+function addKeyword() {
+  const inp = document.getElementById('kw-input');
+  const kw = inp.value.trim().toLowerCase();
+  if (kw && !keywords.includes(kw)) { keywords.push(kw); renderChips(); }
+  inp.value = '';
+}
+
+function removeKeyword(kw) {
+  keywords = keywords.filter(k => k !== kw);
+  renderChips();
+}
+
+function renderChips() {
+  document.getElementById('kw-chips').innerHTML = keywords.map(k =>
+    `<span class="chip">${k} <span class="remove" onclick="removeKeyword('${k}')">×</span></span>`
+  ).join('');
+}
+
+async function saveCategoria() {
+  const id   = document.getElementById('cat-id').value;
+  const nome = document.getElementById('cat-nome').value.trim();
+  if (!nome) { toast('O nome é obrigatório', false); return; }
+  const payload = {
+    nome, cor: document.getElementById('cat-cor').value,
+    icone: document.getElementById('cat-icone').value || '🏷️',
+    palavras_chave: keywords
+  };
+  if (id) {
+    await fetch(`/api/categorias/${id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    toast('Categoria actualizada');
+  } else {
+    await fetch('/api/categorias', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    toast('Categoria criada');
+  }
+  closeCatModal();
+  loadCategorias();
+}
+
+async function recategorizar() {
+  const r = await fetch('/api/recategorizar', { method: 'POST' });
+  const d = await r.json();
+  toast(`${d.total} movimentos re-categorizados`);
+}
+
+// ── Mov category modal ────────────────────────────────────────────────────────
+function openMovModal(id, catActual, badgeEl) {
+  document.getElementById('mov-id').value = id;
+  const m = currentMovimentos.find(x => x.id === id);
+  document.getElementById('mov-desc').textContent = m ? m.descritivo : '';
+  const sel = document.getElementById('mov-cat-select');
+  sel.innerHTML = categorias.map(c =>
+    `<option value="${c.nome}" ${c.nome===catActual?'selected':''}>${c.icone} ${c.nome}</option>`
+  ).join('');
+  document.getElementById('mov-modal').classList.add('open');
+}
+function closeMovModal() { document.getElementById('mov-modal').classList.remove('open'); }
+
+async function saveMovCategoria() {
+  const id  = document.getElementById('mov-id').value;
+  const cat = document.getElementById('mov-cat-select').value;
+  await fetch(`/api/movimentos/${id}/categoria`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({categoria: cat})
+  });
+  closeMovModal();
+  toast('Categoria alterada');
+  loadMovimentos();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadDashboard();
+</script>
+</body>
+</html>
