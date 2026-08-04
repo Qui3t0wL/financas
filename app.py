@@ -95,19 +95,146 @@ def categorizar(descritivo, categorias):
 
 def parse_pdf(filepath):
     """
-    Tenta extrair movimentos de PDFs bancários com colunas:
-    DATA LANC | DATA VALOR | DESCRITIVO | DEBITO | CREDITO | SALDO
+    Parser para extratos ActivoBank (pdftotext -layout).
+    Formato: DATA LANC | DATA VALOR | DESCRITIVO | DEBITO | CREDITO | SALDO
+    Datas no formato M.DD (ex: 7.01), sem ano — ano extraído do cabeçalho.
+    Colunas identificadas por posição no texto posicional (256 chars/linha):
+      - pos 148: DATA LANC
+      - pos 153: DATA VALOR
+      - pos 161: DESCRITIVO
+      - pos <230: DEBITO (right-aligned)
+      - pos 230-240: CREDITO (right-aligned)
+      - pos >240: SALDO
+    Débito vs Crédito determinado por posição do valor E confirmado pelo saldo.
     """
+    import subprocess
+
+    result = subprocess.run(
+        ['pdftotext', '-layout', filepath, '-'],
+        capture_output=True, text=True
+    )
+    text = result.stdout
+
+    if not text.strip():
+        # Fallback para pdfplumber se pdftotext não produzir nada
+        return _parse_pdf_pdfplumber(filepath)
+
+    # Detecta ano do extrato
+    ano_match = re.search(r'EXTRATO DE (\d{4})', text)
+    ano = ano_match.group(1) if ano_match else str(datetime.now().year)
+
+    def fmt_data_ab(s):
+        """Converte '7.01' -> '2026-07-01'"""
+        parts = s.split('.')
+        if len(parts) == 2:
+            return f'{ano}-{int(parts[0]):02d}-{int(parts[1]):02d}'
+        return None
+
+    def extrair_val(s):
+        """Extrai float de string com espaços como milhar: '1 234.56' -> 1234.56"""
+        s = s.strip()
+        if not s:
+            return None
+        try:
+            return float(s.replace(' ', ''))
+        except Exception:
+            return None
+
+    # Extrai saldo inicial para validação
+    saldo_ant_m = re.search(r'SALDO INICIAL\s+([\d ]+\.\d{2})', text)
+    saldo_anterior = float(saldo_ant_m.group(1).replace(' ', '')) if saldo_ant_m else None
+
+    SKIP_PATTERNS = [
+        'Capital Social', 'Banco Activo', 'SALDO INICIAL', 'SALDO FINAL',
+        'SALDO DISPONIVEL', 'ULTRAPASSAGEM', 'EXTRATO DE', 'PAG:', 'www.',
+        'Poderá obter', 'legislação', 'MENSAGEM', 'AGENDA', 'RESUMO',
+        'CONTA SIMPLES', 'MOEDA BASE', 'BIC/SWIFT', 'DEPOSITO A ORDEM',
+        'EXT. N.', 'EXTRATO COMBINADO',
+    ]
+
+    movimentos = []
+    for line in text.splitlines():
+        # Ignora linhas de cabeçalho/rodapé
+        if any(p in line for p in SKIP_PATTERNS):
+            continue
+
+        # Linha de movimento: começa com muitos espaços seguidos de M.DD M.DD
+        m = re.match(r'\s{80,}(\d{1,2}\.\d{2})\s+(\d{1,2}\.\d{2})\s', line)
+        if not m:
+            continue
+
+        data_lanc  = fmt_data_ab(m.group(1))
+        data_valor = fmt_data_ab(m.group(2))
+        if not data_lanc:
+            continue
+
+        # Encontra todos os valores monetários e as suas posições
+        vals_pos = [
+            (vm.start(), float(vm.group().replace(' ', '')))
+            for vm in re.finditer(r'(?<!\d)(\d{1,3}(?: \d{3})*\.\d{2})(?!\d)', line)
+            if vm.start() > 160  # ignora as datas no início da linha
+        ]
+
+        if len(vals_pos) < 2:
+            continue  # sem valor + saldo, linha inválida
+
+        # Último valor é sempre o saldo
+        saldo = vals_pos[-1][1]
+
+        # Determina se o penúltimo valor é débito ou crédito pela posição
+        val_pos, val = vals_pos[-2]
+
+        # Limiar empírico: crédito fica em coluna >= 230, débito < 230
+        LIMIAR_CREDITO = 230
+
+        if val_pos >= LIMIAR_CREDITO:
+            debito, credito = None, val
+        else:
+            # Confirma com saldo anterior quando disponível
+            if saldo_anterior is not None:
+                diff = round(saldo - saldo_anterior, 2)
+                if abs(diff + val) < 0.02:
+                    debito, credito = val, None   # saldo diminuiu
+                elif abs(diff - val) < 0.02:
+                    debito, credito = None, val   # saldo aumentou
+                else:
+                    debito, credito = val, None   # fallback: débito
+            else:
+                debito, credito = val, None
+
+        saldo_anterior = saldo
+
+        # Descritivo: texto entre a data_valor e o primeiro valor monetário
+        inicio_desc = m.end()
+        fim_desc = vals_pos[-2][0] if len(vals_pos) >= 2 else len(line)
+        descritivo = line[inicio_desc:fim_desc].strip()
+        descritivo = re.sub(r'\s{2,}', ' ', descritivo).strip()
+
+        # Remove sufixo CONTACTLESS (mantém o nome do estabelecimento)
+        descritivo = re.sub(r'\s*CONTACTLESS\s*$', '', descritivo).strip()
+
+        movimentos.append({
+            'data_lanc':  data_lanc,
+            'data_valor': data_valor or data_lanc,
+            'descritivo': descritivo,
+            'debito':     debito,
+            'credito':    credito,
+            'saldo':      saldo,
+        })
+
+    return movimentos
+
+
+def _parse_pdf_pdfplumber(filepath):
+    """Fallback genérico via pdfplumber para outros bancos."""
     rows = []
     with pdfplumber.open(filepath) as pdf:
         for page in pdf.pages:
-            # Tenta extração de tabelas primeiro
             tables = page.extract_tables()
             for table in tables:
                 for row in table:
                     if row and len(row) >= 5:
                         rows.append(row)
-            # Se não encontrou tabelas, tenta texto com layout
             if not tables:
                 text = page.extract_text(layout=True) or ''
                 for line in text.splitlines():
@@ -117,18 +244,13 @@ def parse_pdf(filepath):
 
     movimentos = []
     for row in rows:
-        # Normaliza para lista de strings
         row = [str(c).strip() if c else '' for c in row]
-        # Ignora cabeçalhos
-        if any(h in ' '.join(row).upper() for h in ['DATA LANC', 'DESCRITIVO', 'DÉBITO', 'CRÉDITO', 'DATA VALOR']):
+        if any(h in ' '.join(row).upper() for h in ['DATA LANC', 'DESCRITIVO', 'DÉBITO', 'CRÉDITO']):
             continue
-        # Ignora linhas vazias ou com menos de 4 colunas com conteúdo
         filled = [c for c in row if c]
         if len(filled) < 4:
             continue
-        # Tenta mapear colunas
         try:
-            # Formato: DATA_LANC DATA_VALOR DESCRITIVO DEBITO CREDITO SALDO
             if len(row) >= 6:
                 data_lanc  = parse_data(row[0])
                 data_valor = parse_data(row[1])
@@ -145,10 +267,8 @@ def parse_pdf(filepath):
                 saldo      = parse_valor(row[4])
             else:
                 continue
-
             if not data_lanc or not descritivo:
                 continue
-
             movimentos.append({
                 'data_lanc':  data_lanc,
                 'data_valor': data_valor or data_lanc,
@@ -159,7 +279,6 @@ def parse_pdf(filepath):
             })
         except Exception:
             continue
-
     return movimentos
 
 # ── Período 20→19 ─────────────────────────────────────────────────────────────
@@ -355,6 +474,98 @@ def get_periodos():
         rows = [dict(r) for r in conn.execute('SELECT DISTINCT data_lanc FROM movimentos').fetchall()]
     periodos = sorted(set(get_periodo(r['data_lanc']) for r in rows), reverse=True)
     return jsonify([{'periodo': p, 'label': periodo_label(p)} for p in periodos])
+
+@app.route('/api/estatisticas')
+def get_estatisticas():
+    """
+    Devolve dados agregados para gráficos:
+      - por_mes: gastos totais por categoria em cada período mensal (20→19)
+      - por_ano: gastos totais por categoria em cada ano civil
+      - evolucao_mensal: série temporal de débito/crédito/saldo por mês
+      - top_categorias: ranking de categorias no intervalo seleccionado
+    Query params: ano=2026 (filtra por ano civil; omitir = todos)
+    """
+    filtro_ano = request.args.get('ano')
+
+    with get_db() as conn:
+        rows = [dict(r) for r in conn.execute(
+            'SELECT * FROM movimentos ORDER BY data_lanc'
+        ).fetchall()]
+
+    # Enriquece com período e ano civil
+    for r in rows:
+        r['periodo']      = get_periodo(r['data_lanc'])
+        r['periodo_label']= periodo_label(r['periodo'])
+        r['ano_civil']    = r['data_lanc'][:4] if r['data_lanc'] else '?'
+
+    # Filtra por ano civil se pedido
+    if filtro_ano:
+        rows = [r for r in rows if r['ano_civil'] == filtro_ano]
+
+    # ── Por mês (períodos 20→19) ──────────────────────────────────────────
+    por_mes = {}          # { periodo: { cat: total } }
+    for r in rows:
+        p   = r['periodo']
+        cat = r['categoria'] or 'Sem categoria'
+        val = r['debito'] or 0
+        if val == 0:
+            continue
+        por_mes.setdefault(p, {})
+        por_mes[p][cat] = round(por_mes[p].get(cat, 0) + val, 2)
+
+    # ── Por ano civil ─────────────────────────────────────────────────────
+    por_ano = {}
+    for r in rows:
+        ano = r['ano_civil']
+        cat = r['categoria'] or 'Sem categoria'
+        val = r['debito'] or 0
+        if val == 0:
+            continue
+        por_ano.setdefault(ano, {})
+        por_ano[ano][cat] = round(por_ano[ano].get(cat, 0) + val, 2)
+
+    # ── Evolução mensal (débito total / crédito total) ────────────────────
+    evolucao = {}
+    for r in rows:
+        p = r['periodo']
+        evolucao.setdefault(p, {'periodo': p, 'label': r['periodo_label'],
+                                'debito': 0, 'credito': 0})
+        evolucao[p]['debito']  = round(evolucao[p]['debito']  + (r['debito']  or 0), 2)
+        evolucao[p]['credito'] = round(evolucao[p]['credito'] + (r['credito'] or 0), 2)
+    evolucao_list = sorted(evolucao.values(), key=lambda x: x['periodo'])
+
+    # ── Top categorias (período seleccionado) ─────────────────────────────
+    top = {}
+    for r in rows:
+        cat = r['categoria'] or 'Sem categoria'
+        val = r['debito'] or 0
+        if val == 0:
+            continue
+        top[cat] = round(top.get(cat, 0) + val, 2)
+    top_list = sorted([{'categoria': k, 'total': v} for k, v in top.items()],
+                      key=lambda x: x['total'], reverse=True)
+
+    # ── Anos disponíveis ──────────────────────────────────────────────────
+    anos_disp = sorted(set(r['ano_civil'] for r in rows
+                           if r['data_lanc']), reverse=True)
+
+    # Serializa por_mes e por_ano como listas ordenadas
+    def dict_para_lista(d):
+        return sorted(
+            [{'chave': k, 'categorias': [{'nome': cn, 'total': cv}
+                                          for cn, cv in sorted(v.items(),
+                                              key=lambda x: x[1], reverse=True)]}
+             for k, v in d.items()],
+            key=lambda x: x['chave']
+        )
+
+    return jsonify({
+        'por_mes':         dict_para_lista(por_mes),
+        'por_ano':         dict_para_lista(por_ano),
+        'evolucao_mensal': evolucao_list,
+        'top_categorias':  top_list,
+        'anos':            anos_disp,
+    })
 
 if __name__ == '__main__':
     init_db()
