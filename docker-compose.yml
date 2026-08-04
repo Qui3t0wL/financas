@@ -1,0 +1,16 @@
+services:
+  financas:
+    build: .
+    container_name: financas
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - financas_data:/app/data
+    environment:
+      - FLASK_ENV=production
+      - TZ=Europe/Lisbon
+
+volumes:
+  financas_data:
+    driver: local
