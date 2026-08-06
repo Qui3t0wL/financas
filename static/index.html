@@ -882,14 +882,13 @@ function resetImport() {
 async function parsePDF(file) {
   if (!file) return;
   const contaId = document.getElementById('import-conta').value;
-  if (!contaId) { toast('Seleciona uma conta primeiro', false); return; }
 
   document.getElementById('upload-parsing').style.display = 'block';
   document.getElementById('drop-zone').style.display = 'none';
 
   const fd = new FormData();
   fd.append('pdf', file);
-  fd.append('conta_id', contaId);
+  if (contaId) fd.append('conta_id', contaId);
 
   try {
     const r = await fetch('/api/upload/parse', { method: 'POST', body: fd });
@@ -897,11 +896,15 @@ async function parsePDF(file) {
     if (!r.ok) {
       document.getElementById('upload-parsing').style.display = 'none';
       document.getElementById('drop-zone').style.display = 'block';
-      toast(d.error, false);
-      return;
+      toast(d.error, false); return;
     }
     importPendente = d;
-    renderReview(d);
+    if (d.formato === 'multi_secao') {
+      renderReviewMulti(d);
+    } else {
+      if (!contaId) { toast('Seleciona uma conta primeiro', false); document.getElementById('upload-parsing').style.display='none'; document.getElementById('drop-zone').style.display='block'; return; }
+      renderReview(d);
+    }
   } catch(e) {
     document.getElementById('upload-parsing').style.display = 'none';
     document.getElementById('drop-zone').style.display = 'block';
@@ -909,29 +912,67 @@ async function parsePDF(file) {
   }
 }
 
+// ── Render: formato simples (ActivoBank) ──────────────────────────────────────
 function renderReview(data) {
   document.getElementById('import-step-upload').style.display = 'none';
   document.getElementById('import-step-review').style.display = 'block';
 
-  // Summary pills
-  const summaryEl = document.getElementById('import-summary');
-  summaryEl.innerHTML = `
+  document.getElementById('import-summary').innerHTML = `
+    <span class="import-pill" style="background:rgba(16,185,129,.12);color:var(--green)">✅ ${data.novos} novos</span>
+    <span class="import-pill" style="background:rgba(239,163,68,.12);color:#f59e0b">${data.duplicados} possíveis duplicados</span>
+    <span class="import-pill" style="background:var(--surface2);color:var(--muted)">📄 ${data.total} total no PDF</span>`;
+
+  document.getElementById('import-mov-list').innerHTML = renderMovRows(data.movimentos, '');
+  updateConfirmBtn();
+}
+
+// ── Render: formato multi-secção (Moey/CA) ────────────────────────────────────
+function renderReviewMulti(data) {
+  document.getElementById('import-step-upload').style.display = 'none';
+  document.getElementById('import-step-review').style.display = 'block';
+
+  document.getElementById('import-summary').innerHTML = `
+    <span class="import-pill" style="background:rgba(99,102,241,.12);color:var(--accent)">📋 ${data.secoes.length} secções detetadas</span>
     <span class="import-pill" style="background:rgba(16,185,129,.12);color:var(--green)">✅ ${data.novos} novos</span>
     <span class="import-pill" style="background:rgba(239,163,68,.12);color:#f59e0b">${data.duplicados} possíveis duplicados</span>
     <span class="import-pill" style="background:var(--surface2);color:var(--muted)">📄 ${data.total} total no PDF</span>
-  `;
+    <p style="font-size:.82rem;color:var(--muted);width:100%;margin-top:4px">⚠️ Este PDF contém múltiplas contas. Seleciona a conta destino para cada secção antes de confirmar.</p>`;
 
-  // Movimento list
-  const listEl = document.getElementById('import-mov-list');
-  listEl.innerHTML = data.movimentos.map((m, i) => {
+  document.getElementById('import-mov-list').innerHTML = data.secoes.map((secao, si) => {
+    const contasOpts = contas.map(c =>
+      `<option value="${c.id}" ${data.conta_id == c.id ? 'selected' : ''}>${c.icone} ${c.nome} (${c.banco})</option>`
+    ).join('');
+    return `
+      <div style="margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+          <h3 style="font-size:.95rem;font-weight:700">🏦 ${secao.nome_secao}</h3>
+          <span style="font-size:.78rem;color:var(--muted)">${secao.movimentos.length} movimentos</span>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+            <label style="font-size:.78rem;color:var(--muted)">Conta destino:</label>
+            <select class="secao-conta-sel" data-secao="${si}" style="width:auto;font-size:.82rem;padding:5px 8px">
+              <option value="">— Seleciona —</option>
+              ${contasOpts}
+            </select>
+          </div>
+        </div>
+        ${renderMovRows(secao.movimentos, `s${si}-`)}
+      </div>`;
+  }).join('<hr style="border-color:var(--border);margin:16px 0">');
+
+  updateConfirmBtn();
+}
+
+// ── Shared: render movement rows ──────────────────────────────────────────────
+function renderMovRows(movimentos, prefix) {
+  return movimentos.map((m, i) => {
     const isDup = m._estado === 'duplicado';
     const val   = m.debito || m.credito || 0;
     const isDb  = !!m.debito;
     const {cor, icone} = catStyle(m.categoria);
+    const uid = `${prefix}${i}`;
 
-    const baseClass = isDup ? 'import-mov-dup' : 'import-mov-new';
     const checkHtml = isDup
-      ? `<input type="checkbox" class="dup-check" data-idx="${i}" onchange="updateDupRow(${i})" style="width:16px;height:16px;cursor:pointer">`
+      ? `<input type="checkbox" class="dup-check" data-uid="${uid}" onchange="updateDupRow('${uid}')" style="width:16px;height:16px;cursor:pointer">`
       : `<span style="color:var(--green);font-size:1rem">✅</span>`;
 
     const statusLabel = isDup
@@ -941,125 +982,130 @@ function renderReview(data) {
     let detailHtml = '';
     if (isDup && m._existente) {
       const ex = m._existente;
-      detailHtml = `
-        <div class="import-mov-detail" id="detail-${i}">
-          <p style="margin-bottom:8px;font-weight:600">Comparação com o movimento existente:</p>
-          <div class="dup-compare">
-            <div class="dup-compare-col">
-              <h4 style="color:var(--muted)">📁 Já na base de dados</h4>
-              <p>Data: <strong>${fmtDate(ex.data_lanc)}</strong><br>
-              Descrição: <strong>${ex.descritivo}</strong><br>
-              ${ex.debito!=null?`Débito: <strong class="debit">${fmt(ex.debito)}</strong>`:`Crédito: <strong class="credit">${fmt(ex.credito)}</strong>`}<br>
-              Saldo: ${ex.saldo!=null?fmt(ex.saldo):'—'}</p>
-            </div>
-            <div class="dup-compare-col">
-              <h4 style="color:#f59e0b">📄 No PDF</h4>
-              <p>Data: <strong>${fmtDate(m.data_lanc)}</strong><br>
-              Descrição: <strong>${m.descritivo}</strong><br>
-              ${m.debito!=null?`Débito: <strong class="debit">${fmt(m.debito)}</strong>`:`Crédito: <strong class="credit">${fmt(m.credito)}</strong>`}<br>
-              Saldo: ${m.saldo!=null?fmt(m.saldo):'—'}</p>
-            </div>
+      detailHtml = `<div class="import-mov-detail" id="detail-${uid}">
+        <p style="margin-bottom:8px;font-weight:600">Comparação com o movimento existente:</p>
+        <div class="dup-compare">
+          <div class="dup-compare-col">
+            <h4 style="color:var(--muted)">📁 Já na base de dados</h4>
+            <p>Data: <strong>${fmtDate(ex.data_lanc)}</strong><br>
+            Descrição: <strong>${ex.descritivo}</strong><br>
+            ${ex.debito!=null?`Débito: <strong class="debit">${fmt(ex.debito)}</strong>`:`Crédito: <strong class="credit">${fmt(ex.credito)}</strong>`}<br>
+            Saldo: ${ex.saldo!=null?fmt(ex.saldo):'—'}</p>
           </div>
-          <p style="margin-top:8px">✔️ Marca a caixa se quiseres inserir este movimento <em>mesmo assim</em> (ex: mesmo valor em dias diferentes que acontece ser igual).</p>
-        </div>`;
-    }
-
-    return `
-      <div class="import-mov-row" id="row-${i}">
-        <div class="import-mov-header ${baseClass}" onclick="${isDup ? `toggleDetail(${i})` : ''}">
-          <div style="flex-shrink:0">${checkHtml}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.descritivo}</div>
-            <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
-              <span style="font-size:.75rem;color:var(--muted)">${fmtDate(m.data_lanc)}</span>
-              <span class="badge" style="background:${cor}22;color:${cor};border:1px solid ${cor}44">${icone} ${m.categoria}</span>
-              ${statusLabel}
-            </div>
-          </div>
-          <div style="flex-shrink:0;text-align:right">
-            <div class="${isDb ? 'debit' : 'credit'}" style="font-weight:700">${isDb ? '-' : '+'}${fmt(val)}</div>
-            ${isDup ? '<div style="font-size:.7rem;color:var(--muted);margin-top:2px">clica para comparar</div>' : ''}
+          <div class="dup-compare-col">
+            <h4 style="color:#f59e0b">📄 No PDF</h4>
+            <p>Data: <strong>${fmtDate(m.data_lanc)}</strong><br>
+            Descrição: <strong>${m.descritivo}</strong><br>
+            ${m.debito!=null?`Débito: <strong class="debit">${fmt(m.debito)}</strong>`:`Crédito: <strong class="credit">${fmt(m.credito)}</strong>`}<br>
+            Saldo: ${m.saldo!=null?fmt(m.saldo):'—'}</p>
           </div>
         </div>
-        ${detailHtml}
+        <p style="margin-top:8px;font-size:.82rem">✔️ Marca a caixa se quiseres inserir mesmo assim.</p>
       </div>`;
-  }).join('');
+    }
 
-  updateConfirmBtn();
+    return `<div class="import-mov-row" id="row-${uid}">
+      <div class="import-mov-header ${isDup ? 'import-mov-dup' : 'import-mov-new'}" onclick="${isDup ? `toggleDetail('${uid}')` : ''}">
+        <div style="flex-shrink:0">${checkHtml}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.descritivo}</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
+            <span style="font-size:.75rem;color:var(--muted)">${fmtDate(m.data_lanc)}</span>
+            <span class="badge" style="background:${cor}22;color:${cor};border:1px solid ${cor}44">${icone} ${m.categoria}</span>
+            ${statusLabel}
+          </div>
+        </div>
+        <div style="flex-shrink:0;text-align:right">
+          <div class="${isDb?'debit':'credit'}" style="font-weight:700">${isDb?'-':'+'}${fmt(val)}</div>
+          ${isDup ? '<div style="font-size:.7rem;color:var(--muted);margin-top:2px">clica para comparar</div>' : ''}
+        </div>
+      </div>
+      ${detailHtml}
+    </div>`;
+  }).join('');
 }
 
-function toggleDetail(i) {
-  const el = document.getElementById(`detail-${i}`);
+function toggleDetail(uid) {
+  const el = document.getElementById(`detail-${uid}`);
   if (el) el.classList.toggle('open');
 }
 
-function updateDupRow(i) {
-  const cb  = document.querySelector(`.dup-check[data-idx="${i}"]`);
-  const row = document.getElementById(`row-${i}`);
+function updateDupRow(uid) {
+  const cb  = document.querySelector(`.dup-check[data-uid="${uid}"]`);
+  const row = document.getElementById(`row-${uid}`);
   const hdr = row.querySelector('.import-mov-header');
-  if (cb.checked) {
-    hdr.classList.remove('import-mov-dup');
-    hdr.classList.add('import-mov-dup-checked');
-  } else {
-    hdr.classList.remove('import-mov-dup-checked');
-    hdr.classList.add('import-mov-dup');
-  }
+  hdr.classList.toggle('import-mov-dup', !cb.checked);
+  hdr.classList.toggle('import-mov-dup-checked', cb.checked);
   updateConfirmBtn();
 }
 
 function selectAllDuplicates(select) {
   document.querySelectorAll('.dup-check').forEach(cb => {
     cb.checked = select;
-    updateDupRow(parseInt(cb.dataset.idx));
+    updateDupRow(cb.dataset.uid);
   });
 }
 
 function updateConfirmBtn() {
   if (!importPendente) return;
-  const totalInserir = importPendente.novos +
-    document.querySelectorAll('.dup-check:checked').length;
-  document.getElementById('btn-confirmar').textContent =
-    `Confirmar importação (${totalInserir} movimentos)`;
+  const totalInserir = importPendente.novos + document.querySelectorAll('.dup-check:checked').length;
+  document.getElementById('btn-confirmar').textContent = `Confirmar importação (${totalInserir} movimentos)`;
 }
 
 async function confirmarImport() {
   if (!importPendente) return;
-  const dupChecked = new Set(
-    [...document.querySelectorAll('.dup-check:checked')].map(cb => parseInt(cb.dataset.idx))
-  );
-  // Novos + duplicados marcados pelo utilizador
-  const aInserir = importPendente.movimentos.filter((m, i) =>
-    m._estado === 'novo' || dupChecked.has(i)
-  );
+  const dupCheckedUids = new Set([...document.querySelectorAll('.dup-check:checked')].map(cb => cb.dataset.uid));
+
+  let pedidos = [];
+
+  if (importPendente.formato === 'multi_secao') {
+    // Valida que todas as secções têm conta selecionada
+    const sels = document.querySelectorAll('.secao-conta-sel');
+    for (const sel of sels) {
+      if (!sel.value) { toast(`Seleciona a conta destino para todas as secções`, false); return; }
+    }
+    // Constrói um pedido por secção
+    importPendente.secoes.forEach((secao, si) => {
+      const contaIdSecao = document.querySelector(`.secao-conta-sel[data-secao="${si}"]`).value;
+      const aInserir = secao.movimentos.filter((m, i) =>
+        m._estado === 'novo' || dupCheckedUids.has(`s${si}-${i}`)
+      );
+      if (aInserir.length) {
+        pedidos.push({ movimentos: aInserir, conta_id: contaIdSecao, fonte: importPendente.fonte });
+      }
+    });
+  } else {
+    const aInserir = importPendente.movimentos.filter((m, i) =>
+      m._estado === 'novo' || dupCheckedUids.has(`${i}`)
+    );
+    pedidos.push({ movimentos: aInserir, conta_id: importPendente.conta_id, fonte: importPendente.fonte });
+  }
 
   document.getElementById('btn-confirmar').disabled = true;
   document.getElementById('btn-confirmar').textContent = 'A inserir…';
 
   try {
-    const r = await fetch('/api/upload/confirmar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        movimentos: aInserir,
-        conta_id:   importPendente.conta_id,
-        fonte:      importPendente.fonte,
-      })
-    });
-    const d = await r.json();
+    let totalInseridos = 0, totalTrf = 0;
+    for (const pedido of pedidos) {
+      const r = await fetch('/api/upload/confirmar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pedido)
+      });
+      const d = await r.json();
+      totalInseridos += d.inseridos || 0;
+      totalTrf = Math.max(totalTrf, d.transferencias || 0);
+    }
 
     document.getElementById('import-step-review').style.display = 'none';
     document.getElementById('import-step-done').style.display   = 'block';
     document.getElementById('import-done-content').innerHTML = `
       <p style="color:var(--green);font-weight:700;font-size:1.05rem;margin-bottom:10px">✅ Importação concluída!</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-        <span class="import-pill" style="background:rgba(16,185,129,.12);color:var(--green)">${d.inseridos} inseridos</span>
-        <span class="import-pill" style="background:var(--surface2);color:var(--muted)">${dupChecked.size} duplicados aceites</span>
-        <span class="import-pill" style="background:var(--surface2);color:var(--muted)">${importPendente.duplicados - dupChecked.size} duplicados ignorados</span>
-        <span class="import-pill" style="background:rgba(99,102,241,.12);color:var(--accent)">${d.transferencias||0} transferências internas</span>
+        <span class="import-pill" style="background:rgba(16,185,129,.12);color:var(--green)">${totalInseridos} inseridos</span>
+        <span class="import-pill" style="background:var(--surface2);color:var(--muted)">${dupCheckedUids.size} duplicados aceites</span>
+        <span class="import-pill" style="background:rgba(99,102,241,.12);color:var(--accent)">${totalTrf} transferências internas</span>
       </div>
-      <p style="font-size:.82rem;color:var(--muted)">Podes ver os movimentos importados na secção <strong>Movimentos</strong>.</p>
-    `;
-    toast(`${d.inseridos} movimentos importados!`);
+      <p style="font-size:.82rem;color:var(--muted)">Podes ver os movimentos importados na secção <strong>Movimentos</strong>.</p>`;
+    toast(`${totalInseridos} movimentos importados!`);
     importPendente = null;
   } catch(e) {
     toast('Erro ao confirmar importação.', false);
