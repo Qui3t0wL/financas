@@ -207,7 +207,8 @@ def _parse_moey(text):
     return []
 
 
-
+def _parse_activobank(text):
+    """Parser para extratos ActivoBank (pdftotext -layout, colunas posicionais)."""
     ano_m = re.search(r'EXTRATO DE (\d{4})', text)
     ano   = ano_m.group(1) if ano_m else str(datetime.now().year)
 
