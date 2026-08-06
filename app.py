@@ -103,16 +103,111 @@ def categorizar(descritivo, categorias):
     return 'Sem categoria'
 
 def parse_pdf(filepath):
-    """Parser principal: tenta ActivoBank via pdftotext, fallback pdfplumber."""
+    """
+    Parser principal com deteção automática de formato:
+      1. Tenta Moey/Crédito Agrícola (extrato combinado com múltiplas secções)
+      2. Tenta ActivoBank (layout posicional via pdftotext)
+      3. Fallback genérico via pdfplumber
+    Devolve lista de movimentos OU lista de secções {'nome_secao', 'movimentos'}.
+    """
     import subprocess
-    result = subprocess.run(['pdftotext','-layout', filepath,'-'], capture_output=True, text=True)
+    result = subprocess.run(['pdftotext', '-layout', filepath, '-'], capture_output=True, text=True)
     text = result.stdout
     if text.strip():
+        # Tenta Moey/CA primeiro (tem secções com nomes de conta)
+        secoes = _parse_moey(text)
+        if secoes:
+            return secoes
+        # Tenta ActivoBank
         movs = _parse_activobank(text)
-        if movs: return movs
+        if movs:
+            return movs
     return _parse_pdfplumber(filepath)
 
-def _parse_activobank(text):
+def _parse_moey(text):
+    """
+    Parser para extratos Moey!/Crédito Agrícola.
+    Formato: DD-MM-YYYY / DD-MM-YYYY   DESCRIÇÃO   VALOR,CC +/-   SALDO,CC
+    O extrato pode conter múltiplas secções de conta (MOEY!, POUPANÇA, etc.)
+    Devolve lista de secções: [{'nome_secao': str, 'movimentos': [...]}]
+    ou [] se não for este formato.
+    """
+    # Sinal de reconhecimento: extrato Moey tem datas DD-MM-YYYY / DD-MM-YYYY
+    # e valores com vírgula decimal seguidos de + ou -
+    MOV_RE = re.compile(
+        r'(\d{2}-\d{2}-\d{4})\s*/\s*(\d{2}-\d{2}-\d{4})'  # datas
+        r'\s{2,}(.+?)'                                        # descrição
+        r'\s{2,}([\d\.]+,\d{2})\s+([+-])'                   # valor + sinal
+        r'\s+([\d\.]+,\d{2})'                                # saldo
+    )
+
+    def conv_data(d):
+        dd, mm, yyyy = d.split('-')
+        return f'{yyyy}-{mm}-{dd}'
+
+    def conv_val(v):
+        return float(v.replace('.', '').replace(',', '.'))
+
+    # Nomes de secções que o Moey usa
+    SECOES_RE = re.compile(
+        r'(CONTA MOEY!|MOEY! ACCOUNT|CONTA POUPANÇA|SAVINGS|CONTA ORDENADO|CONTA COFRE)',
+        re.IGNORECASE
+    )
+
+    linhas = text.splitlines()
+    secoes = []
+    secao_atual = None
+
+    SKIP = ['SALDO FINAL', 'FINAL BALANCE', 'SALDO DISPONÍVEL', 'AVAILABLE BALANCE',
+            'RESUMO DOS PRODUTOS', 'APLICAÇÕES', 'RESPONSABILIDADES', 'TOTAL:',
+            'DATA LANÇAMENTO', 'ACCOUNT DATE', 'DESCRIPTION', 'DESCRIÇÃO',
+            'IN / OUT', 'MOVIMENTOS']
+
+    for line in linhas:
+        # Nova secção de conta?
+        sm = SECOES_RE.search(line)
+        if sm:
+            nome = sm.group(1).strip()
+            # Normaliza nome
+            if 'MOEY' in nome.upper():
+                nome = 'Conta Moey!'
+            elif 'POUPANÇA' in nome.upper() or 'SAVINGS' in nome.upper():
+                nome = 'Conta Poupança'
+            elif 'ORDENADO' in nome.upper():
+                nome = 'Conta Ordenado'
+            else:
+                nome = nome.title()
+            secao_atual = {'nome_secao': nome, 'movimentos': []}
+            secoes.append(secao_atual)
+            continue
+
+        if secao_atual is None:
+            continue
+        if any(s in line for s in SKIP):
+            continue
+
+        m = MOV_RE.search(line)
+        if not m:
+            continue
+
+        data_lanc, data_valor, desc, val_str, sinal, saldo_str = m.groups()
+        val = conv_val(val_str)
+        secao_atual['movimentos'].append({
+            'data_lanc':  conv_data(data_lanc),
+            'data_valor': conv_data(data_valor),
+            'descritivo': desc.strip(),
+            'debito':     val if sinal == '-' else None,
+            'credito':    val if sinal == '+' else None,
+            'saldo':      conv_val(saldo_str),
+        })
+
+    # Só reconhece como Moey se encontrou pelo menos uma secção com movimentos
+    if any(s['movimentos'] for s in secoes):
+        return secoes
+    return []
+
+
+
     ano_m = re.search(r'EXTRATO DE (\d{4})', text)
     ano   = ano_m.group(1) if ano_m else str(datetime.now().year)
 
@@ -335,36 +430,83 @@ def upload_parse():
     if not movimentos:
         return jsonify({'error': 'Não foi possível extrair movimentos. Verifica o formato do PDF.'}), 422
 
+    # Moey devolve lista de secções; ActivoBank devolve lista de movimentos directamente
+    is_multi_secao = isinstance(movimentos, list) and movimentos and isinstance(movimentos[0], dict) and 'nome_secao' in movimentos[0]
+
     with get_db() as conn:
         cats = [dict(r) for r in conn.execute('SELECT * FROM categorias').fetchall()]
-        resultado = []
-        for i, m in enumerate(movimentos):
-            m['categoria'] = categorizar(m['descritivo'], cats)
-            existente = conn.execute(
-                'SELECT id, data_lanc, descritivo, debito, credito, saldo FROM movimentos '
-                'WHERE conta_id=? AND data_lanc=? AND descritivo=? AND debito IS ? AND credito IS ?',
-                (conta_id, m['data_lanc'], m['descritivo'], m['debito'], m['credito'])
-            ).fetchone()
-            resultado.append({
-                '_idx':      i,
-                '_estado':   'duplicado' if existente else 'novo',
-                '_existente': dict(existente) if existente else None,
-                'conta_id':  conta_id,
-                'fonte':     file.filename,
-                **m,
+
+        if is_multi_secao:
+            # Formato Moey: múltiplas secções com nome de conta
+            secoes_resultado = []
+            for secao in movimentos:
+                resultado_secao = []
+                for i, m in enumerate(secao['movimentos']):
+                    m['categoria'] = categorizar(m['descritivo'], cats)
+                    existente = conn.execute(
+                        'SELECT id, data_lanc, descritivo, debito, credito, saldo FROM movimentos '
+                        'WHERE conta_id=? AND data_lanc=? AND descritivo=? AND debito IS ? AND credito IS ?',
+                        (conta_id, m['data_lanc'], m['descritivo'], m['debito'], m['credito'])
+                    ).fetchone() if conta_id else None
+                    resultado_secao.append({
+                        '_idx':       i,
+                        '_estado':    'duplicado' if existente else 'novo',
+                        '_existente': dict(existente) if existente else None,
+                        'conta_id':   conta_id,
+                        'fonte':      file.filename,
+                        **m,
+                    })
+                secoes_resultado.append({
+                    'nome_secao': secao['nome_secao'],
+                    'movimentos': resultado_secao,
+                    'novos':      sum(1 for r in resultado_secao if r['_estado'] == 'novo'),
+                    'duplicados': sum(1 for r in resultado_secao if r['_estado'] == 'duplicado'),
+                })
+
+            total_novos = sum(s['novos'] for s in secoes_resultado)
+            total_dups  = sum(s['duplicados'] for s in secoes_resultado)
+            total       = sum(len(s['movimentos']) for s in secoes_resultado)
+
+            return jsonify({
+                'formato':    'multi_secao',
+                'secoes':     secoes_resultado,
+                'novos':      total_novos,
+                'duplicados': total_dups,
+                'total':      total,
+                'fonte':      file.filename,
+                'conta_id':   conta_id,
             })
+        else:
+            # Formato normal (ActivoBank): lista plana de movimentos
+            resultado = []
+            for i, m in enumerate(movimentos):
+                m['categoria'] = categorizar(m['descritivo'], cats)
+                existente = conn.execute(
+                    'SELECT id, data_lanc, descritivo, debito, credito, saldo FROM movimentos '
+                    'WHERE conta_id=? AND data_lanc=? AND descritivo=? AND debito IS ? AND credito IS ?',
+                    (conta_id, m['data_lanc'], m['descritivo'], m['debito'], m['credito'])
+                ).fetchone()
+                resultado.append({
+                    '_idx':       i,
+                    '_estado':    'duplicado' if existente else 'novo',
+                    '_existente': dict(existente) if existente else None,
+                    'conta_id':   conta_id,
+                    'fonte':      file.filename,
+                    **m,
+                })
 
-    novos      = sum(1 for r in resultado if r['_estado'] == 'novo')
-    duplicados = [r for r in resultado if r['_estado'] == 'duplicado']
+            novos      = sum(1 for r in resultado if r['_estado'] == 'novo')
+            duplicados = sum(1 for r in resultado if r['_estado'] == 'duplicado')
 
-    return jsonify({
-        'movimentos':  resultado,
-        'novos':       novos,
-        'duplicados':  len(duplicados),
-        'total':       len(resultado),
-        'fonte':       file.filename,
-        'conta_id':    conta_id,
-    })
+            return jsonify({
+                'formato':    'simples',
+                'movimentos': resultado,
+                'novos':      novos,
+                'duplicados': duplicados,
+                'total':      len(resultado),
+                'fonte':      file.filename,
+                'conta_id':   conta_id,
+            })
 
 
 @app.route('/api/upload/confirmar', methods=['POST'])
